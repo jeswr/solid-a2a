@@ -17,3 +17,4 @@ can be targeted for re-review / upgrade when Fable returns (see the suite charte
 | Artifact | Author | Date | Note |
 |---|---|---|---|
 | Initial package — NL→RDF intent translator, SHACL-bodied Protocol Document, upgrade-handshake codec (M2 of the agentic-Solid roadmap) | Claude Opus 4.8 | 2026-06 | Whole package (`src/`, `test/`, `scripts/`, config, README) is Opus-4.8-authored — a re-review/upgrade candidate. |
+| Reviewability refactor — api-extractor cornerstone (`config/api-extractor.json`, `etc/solid-a2a.api.md`, `api:check` gate, `BuildShapeOptions` export) + cognitive-complexity decompositions (`projectIntent`, `handshakeFromRdf` into named fail-closed steps) | Claude Opus 4.8 | 2026-07 | Behaviour-preserving (171 tests + byte-exact characterization unchanged); roborev-clean (one Medium lockfile finding refuted as a diff-truncation false positive via keyless `npm ci`). |
