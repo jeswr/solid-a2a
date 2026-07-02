@@ -55,6 +55,11 @@ export declare function handshakeToTurtle(message: HandshakeMessage, format?: st
  * quads/dataset OR a Turtle/JSON-LD string (parsed via the sanctioned
  * `@jeswr/fetch-rdf` parser). Returns the typed message, or `undefined` if the
  * graph carries no recognised handshake subject.
+ *
+ * The read is a fail-closed pipeline of four named security steps, each below:
+ * coerce → find the SINGLE typed subject (reject ambiguity) → build
+ * subject-scoped strict readers → project the one message type. No step ever
+ * silently defaults a security-bearing flag (`required` / `accept`).
  */
 export declare function handshakeFromRdf(input: readonly Quad[] | DatasetCore | string, contentType?: string): Promise<HandshakeMessage | undefined>;
 //# sourceMappingURL=handshake.d.ts.map

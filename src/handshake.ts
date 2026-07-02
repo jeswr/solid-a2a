@@ -202,32 +202,54 @@ export function handshakeToTurtle(message: HandshakeMessage, format?: string): P
  * quads/dataset OR a Turtle/JSON-LD string (parsed via the sanctioned
  * `@jeswr/fetch-rdf` parser). Returns the typed message, or `undefined` if the
  * graph carries no recognised handshake subject.
+ *
+ * The read is a fail-closed pipeline of four named security steps, each below:
+ * coerce → find the SINGLE typed subject (reject ambiguity) → build
+ * subject-scoped strict readers → project the one message type. No step ever
+ * silently defaults a security-bearing flag (`required` / `accept`).
  */
 export async function handshakeFromRdf(
   input: readonly Quad[] | DatasetCore | string,
   contentType = "text/turtle",
 ): Promise<HandshakeMessage | undefined> {
-  let quads: Quad[];
+  const quads = await coerceToQuads(input, contentType);
+  const found = findHandshakeSubject(quads);
+  if (found === undefined) {
+    return undefined;
+  }
+  const readers = subjectReaders(quads, found.subject);
+  return found.isOffer ? projectOffer(readers) : projectResponse(readers);
+}
+
+/** Coerce a handshake input (quads / dataset / RDF text) to a quad array. */
+async function coerceToQuads(
+  input: readonly Quad[] | DatasetCore | string,
+  contentType: string,
+): Promise<Quad[]> {
   if (typeof input === "string") {
     const dataset = await parseRdf(input, contentType, {});
-    quads = [...dataset] as Quad[];
-  } else if (Array.isArray(input)) {
-    quads = [...input] as Quad[];
-  } else {
-    quads = [...(input as DatasetCore)] as Quad[];
+    return [...dataset] as Quad[];
   }
+  if (Array.isArray(input)) {
+    return [...input] as Quad[];
+  }
+  return [...(input as DatasetCore)] as Quad[];
+}
 
-  // Find the typed handshake subject(s). A well-formed message has EXACTLY ONE
-  // subject typed a2a:UpgradeOffer XOR a2a:UpgradeResponse. We read predicates
-  // ONLY for that subject (never globally), and reject an ambiguous graph (zero,
-  // multiple, or mixed handshake subjects) rather than splicing triples from
-  // unrelated subjects together — a spoofing vector.
+/**
+ * Find the SINGLE typed handshake subject. A well-formed message has EXACTLY ONE
+ * subject typed `a2a:UpgradeOffer` XOR `a2a:UpgradeResponse`. An ambiguous graph
+ * (zero, multiple, or a mixed offer+response) is REFUSED (`undefined`) rather
+ * than splicing triples from unrelated subjects together — a spoofing guard. The
+ * `rdf:type` object must be a NamedNode; a literal-valued `rdf:type
+ * "…UpgradeOffer"` is malformed RDF and is not treated as a typed subject.
+ */
+function findHandshakeSubject(
+  quads: readonly Quad[],
+): { readonly isOffer: boolean; readonly subject: string } | undefined {
   const offerSubjects = new Set<string>();
   const responseSubjects = new Set<string>();
   for (const q of quads) {
-    // The rdf:type object must be a NamedNode (an IRI) — a literal-valued
-    // `rdf:type "…UpgradeOffer"` is malformed RDF and must not be treated as a
-    // typed handshake subject.
     if (q.predicate.value !== RDF_TYPE || q.object.termType !== "NamedNode") {
       continue;
     }
@@ -237,17 +259,39 @@ export async function handshakeFromRdf(
       responseSubjects.add(q.subject.value);
     }
   }
-
-  const total = offerSubjects.size + responseSubjects.size;
-  if (total !== 1) {
-    // Zero → no handshake; >1 (incl. a mixed offer+response) → ambiguous: refuse.
+  // Zero → no handshake; >1 (incl. a mixed offer+response) → ambiguous: refuse.
+  if (offerSubjects.size + responseSubjects.size !== 1) {
     return undefined;
   }
   const isOffer = offerSubjects.size === 1;
-  const subject = isOffer ? [...offerSubjects][0] : [...responseSubjects][0];
+  const subject = [...(isOffer ? offerSubjects : responseSubjects)][0];
+  if (subject === undefined) {
+    return undefined;
+  }
+  return { isOffer, subject };
+}
 
-  // Readers scoped to the single handshake subject (never global). If a predicate
-  // appears more than once on the subject the graph is malformed → undefined.
+/** Strict, subject-scoped predicate readers over a handshake graph. */
+interface SubjectReaders {
+  /** The single Literal object of `(subject, predicate, ?)`, or `undefined`. */
+  readonly lit: (predicate: string) => string | undefined;
+  /** The single NamedNode object of `(subject, predicate, ?)`, or `undefined`. */
+  readonly iri: (predicate: string) => string | undefined;
+  /**
+   * A boolean predicate read STRICTLY: exactly one literal whose lexical value is
+   * `"true"` or `"false"`. Anything else (missing, repeated, or a non-boolean
+   * form) yields `undefined` so the caller REJECTS the graph rather than silently
+   * defaulting a security-bearing flag (`required` / `accept`).
+   */
+  readonly strictBool: (predicate: string) => boolean | undefined;
+}
+
+/**
+ * Build readers scoped to the single handshake `subject` (never global). If a
+ * predicate appears more than once on the subject the graph is malformed and the
+ * reader yields `undefined`.
+ */
+function subjectReaders(quads: readonly Quad[], subject: string): SubjectReaders {
   const single = (predicate: string, termType: "Literal" | "NamedNode"): string | undefined => {
     const matches = quads.filter(
       (q) =>
@@ -261,51 +305,56 @@ export async function handshakeFromRdf(
     return matches[0]?.object.value;
   };
   const lit = (predicate: string): string | undefined => single(predicate, "Literal");
-  const iri = (predicate: string): string | undefined => single(predicate, "NamedNode");
-  /**
-   * Read a boolean predicate STRICTLY: it must be exactly one literal whose value
-   * is `"true"` or `"false"`. Anything else (missing, repeated, or a non-boolean
-   * lexical form) yields `undefined` so the caller can reject the graph rather
-   * than silently defaulting a security-bearing flag.
-   */
-  const strictBool = (predicate: string): boolean | undefined => {
-    const v = lit(predicate);
-    if (v === "true") {
-      return true;
-    }
-    if (v === "false") {
-      return false;
-    }
-    return undefined;
-  };
-
-  if (isOffer) {
-    const protocolHash = lit(A2A_PROTOCOL_HASH);
-    const protocolSource = iri(A2A_PROTOCOL_SOURCE);
-    const required = strictBool(A2A_REQUIRED);
-    // A malformed/missing `required` must NOT be coerced to optional — reject.
-    if (protocolHash === undefined || protocolSource === undefined || required === undefined) {
+  return {
+    lit,
+    iri: (predicate: string): string | undefined => single(predicate, "NamedNode"),
+    strictBool: (predicate: string): boolean | undefined => {
+      const v = lit(predicate);
+      if (v === "true") {
+        return true;
+      }
+      if (v === "false") {
+        return false;
+      }
       return undefined;
-    }
-    const name = lit(A2A_PROTOCOL_NAME);
-    return {
-      kind: "upgrade-offer",
-      protocolHash,
-      protocolSource,
-      required,
-      ...(name !== undefined && { protocolName: name }),
-    };
-  }
+    },
+  };
+}
 
-  const protocolHash = lit(A2A_PROTOCOL_HASH);
-  const accept = strictBool(A2A_ACCEPT);
-  // A response with a missing/invalid `accept` is malformed — reject (do NOT
-  // default to `accept: false`, which could authorise NL fallback for an
-  // optional offer).
+/**
+ * Project an {@link UpgradeOffer} from the subject readers. A missing/malformed
+ * `protocolHash`, `protocolSource`, or `required` REJECTS the graph — a malformed
+ * `required` must NOT be coerced to optional (the no-silent-downgrade guarantee).
+ */
+function projectOffer(r: SubjectReaders): UpgradeOffer | undefined {
+  const protocolHash = r.lit(A2A_PROTOCOL_HASH);
+  const protocolSource = r.iri(A2A_PROTOCOL_SOURCE);
+  const required = r.strictBool(A2A_REQUIRED);
+  if (protocolHash === undefined || protocolSource === undefined || required === undefined) {
+    return undefined;
+  }
+  const name = r.lit(A2A_PROTOCOL_NAME);
+  return {
+    kind: "upgrade-offer",
+    protocolHash,
+    protocolSource,
+    required,
+    ...(name !== undefined && { protocolName: name }),
+  };
+}
+
+/**
+ * Project an {@link UpgradeResponse} from the subject readers. A missing/invalid
+ * `accept` REJECTS the graph — never default to `accept: false`, which could
+ * authorise NL fallback for an optional offer.
+ */
+function projectResponse(r: SubjectReaders): UpgradeResponse | undefined {
+  const protocolHash = r.lit(A2A_PROTOCOL_HASH);
+  const accept = r.strictBool(A2A_ACCEPT);
   if (protocolHash === undefined || accept === undefined) {
     return undefined;
   }
-  const reason = lit(A2A_REASON);
+  const reason = r.lit(A2A_REASON);
   return {
     kind: "upgrade-response",
     protocolHash,

@@ -783,15 +783,25 @@ function handshakeToTurtle(message, format) {
   return serialize2(handshakeToRdf(message), format);
 }
 async function handshakeFromRdf(input, contentType2 = "text/turtle") {
-  let quads;
+  const quads = await coerceToQuads(input, contentType2);
+  const found = findHandshakeSubject(quads);
+  if (found === void 0) {
+    return void 0;
+  }
+  const readers = subjectReaders(quads, found.subject);
+  return found.isOffer ? projectOffer(readers) : projectResponse(readers);
+}
+async function coerceToQuads(input, contentType2) {
   if (typeof input === "string") {
     const dataset = await parseRdf(input, contentType2, {});
-    quads = [...dataset];
-  } else if (Array.isArray(input)) {
-    quads = [...input];
-  } else {
-    quads = [...input];
+    return [...dataset];
   }
+  if (Array.isArray(input)) {
+    return [...input];
+  }
+  return [...input];
+}
+function findHandshakeSubject(quads) {
   const offerSubjects = /* @__PURE__ */ new Set();
   const responseSubjects = /* @__PURE__ */ new Set();
   for (const q of quads) {
@@ -804,12 +814,17 @@ async function handshakeFromRdf(input, contentType2 = "text/turtle") {
       responseSubjects.add(q.subject.value);
     }
   }
-  const total = offerSubjects.size + responseSubjects.size;
-  if (total !== 1) {
+  if (offerSubjects.size + responseSubjects.size !== 1) {
     return void 0;
   }
   const isOffer = offerSubjects.size === 1;
-  const subject = isOffer ? [...offerSubjects][0] : [...responseSubjects][0];
+  const subject = [...isOffer ? offerSubjects : responseSubjects][0];
+  if (subject === void 0) {
+    return void 0;
+  }
+  return { isOffer, subject };
+}
+function subjectReaders(quads, subject) {
   const single = (predicate, termType) => {
     const matches = quads.filter(
       (q) => q.subject.value === subject && q.predicate.value === predicate && q.object.termType === termType
@@ -820,39 +835,44 @@ async function handshakeFromRdf(input, contentType2 = "text/turtle") {
     return matches[0]?.object.value;
   };
   const lit = (predicate) => single(predicate, "Literal");
-  const iri = (predicate) => single(predicate, "NamedNode");
-  const strictBool = (predicate) => {
-    const v = lit(predicate);
-    if (v === "true") {
-      return true;
-    }
-    if (v === "false") {
-      return false;
-    }
-    return void 0;
-  };
-  if (isOffer) {
-    const protocolHash2 = lit(A2A_PROTOCOL_HASH);
-    const protocolSource = iri(A2A_PROTOCOL_SOURCE);
-    const required = strictBool(A2A_REQUIRED);
-    if (protocolHash2 === void 0 || protocolSource === void 0 || required === void 0) {
+  return {
+    lit,
+    iri: (predicate) => single(predicate, "NamedNode"),
+    strictBool: (predicate) => {
+      const v = lit(predicate);
+      if (v === "true") {
+        return true;
+      }
+      if (v === "false") {
+        return false;
+      }
       return void 0;
     }
-    const name = lit(A2A_PROTOCOL_NAME);
-    return {
-      kind: "upgrade-offer",
-      protocolHash: protocolHash2,
-      protocolSource,
-      required,
-      ...name !== void 0 && { protocolName: name }
-    };
+  };
+}
+function projectOffer(r) {
+  const protocolHash = r.lit(A2A_PROTOCOL_HASH);
+  const protocolSource = r.iri(A2A_PROTOCOL_SOURCE);
+  const required = r.strictBool(A2A_REQUIRED);
+  if (protocolHash === void 0 || protocolSource === void 0 || required === void 0) {
+    return void 0;
   }
-  const protocolHash = lit(A2A_PROTOCOL_HASH);
-  const accept = strictBool(A2A_ACCEPT);
+  const name = r.lit(A2A_PROTOCOL_NAME);
+  return {
+    kind: "upgrade-offer",
+    protocolHash,
+    protocolSource,
+    required,
+    ...name !== void 0 && { protocolName: name }
+  };
+}
+function projectResponse(r) {
+  const protocolHash = r.lit(A2A_PROTOCOL_HASH);
+  const accept = r.strictBool(A2A_ACCEPT);
   if (protocolHash === void 0 || accept === void 0) {
     return void 0;
   }
-  const reason = lit(A2A_REASON);
+  const reason = r.lit(A2A_REASON);
   return {
     kind: "upgrade-response",
     protocolHash,
