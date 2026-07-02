@@ -50,6 +50,7 @@ export { decodeUpgradeOffer, decodeUpgradeResponse, encodeUpgradeOffer, encodeUp
 export { intentFromRdf, intentToJsonLd, intentToRdf, intentToTurtle, parseIntentGraph, } from "./intent.js";
 export { buildProtocolDocument, hashQuads, verifyProtocolDocument } from "./protocol.js";
 export { serialize } from "./serialize.js";
+export type { BuildShapeOptions } from "./shape.js";
 export { buildResponseShape, buildShapeForIntent, defaultShapeId, shapeToTurtle, } from "./shape.js";
 export type { ParseIntentOptions } from "./translate.js";
 export { classifyDeterministic, parseIntent } from "./translate.js";

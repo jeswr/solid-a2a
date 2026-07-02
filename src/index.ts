@@ -67,6 +67,7 @@ export {
 } from "./intent.js";
 export { buildProtocolDocument, hashQuads, verifyProtocolDocument } from "./protocol.js";
 export { serialize } from "./serialize.js";
+export type { BuildShapeOptions } from "./shape.js";
 export {
   buildResponseShape,
   buildShapeForIntent,
