@@ -18,6 +18,7 @@ import {
   VALID_INTENT_ACTIONS,
 } from "./vocab.js";
 import {
+  type ActionNode,
   actionKindOf,
   firstIri,
   firstLiteral,
@@ -168,8 +169,7 @@ export async function parseIntentGraph(
 
 /** Project an {@link IntentNode} to a plain {@link Intent}, or `undefined` if malformed. */
 function projectIntent(node: IntentNode): Intent | undefined {
-  const actions = [...node.actions];
-  const action = actions[0];
+  const action = [...node.actions][0];
   if (action === undefined) {
     return undefined;
   }
@@ -183,22 +183,8 @@ function projectIntent(node: IntentNode): Intent | undefined {
   const recipient = firstIri(action.recipients);
   // Prefer the action's agent; fall back to the intent-node-level agent.
   const agent = firstIri(action.agents) ?? firstIri(node.agents);
-
-  const modes: AclMode[] = [];
-  for (const m of action.modes) {
-    if (m.termType === "NamedNode" && VALID_ACL_MODE_IRIS.has(m.value)) {
-      modes.push(aclModeFromIri(m.value));
-    }
-  }
-
-  const parameters: IntentParameter[] = [];
-  for (const p of node.parameters) {
-    const key = firstLiteral(p.keys);
-    const value = firstLiteral(p.values);
-    if (key !== undefined && value !== undefined) {
-      parameters.push({ key, value });
-    }
-  }
+  const modes = readGrantModes(action);
+  const parameters = readParameters(node);
 
   return {
     id: node.value,
@@ -209,6 +195,39 @@ function projectIntent(node: IntentNode): Intent | undefined {
     ...(modes.length > 0 && { modes }),
     ...(parameters.length > 0 && { parameters }),
   };
+}
+
+/**
+ * The acl: modes carried on an action node, projected to short names. Only
+ * NamedNode objects that are recognised acl: mode IRIs are kept — a malformed
+ * mode term is dropped (the round-trip is lossy on unrecognised terms, never a
+ * throw). Extracted as a named reader so {@link projectIntent} reads as a spec.
+ */
+function readGrantModes(action: ActionNode): AclMode[] {
+  const modes: AclMode[] = [];
+  for (const m of action.modes) {
+    if (m.termType === "NamedNode" && VALID_ACL_MODE_IRIS.has(m.value)) {
+      modes.push(aclModeFromIri(m.value));
+    }
+  }
+  return modes;
+}
+
+/**
+ * The typed key/value parameters carried on an intent node. A parameter node
+ * missing either a literal key or a literal value is dropped (lossy read, never a
+ * throw). Extracted as a named reader so {@link projectIntent} reads as a spec.
+ */
+function readParameters(node: IntentNode): IntentParameter[] {
+  const parameters: IntentParameter[] = [];
+  for (const p of node.parameters) {
+    const key = firstLiteral(p.keys);
+    const value = firstLiteral(p.values);
+    if (key !== undefined && value !== undefined) {
+      parameters.push({ key, value });
+    }
+  }
+  return parameters;
 }
 
 /** Map an acl: mode IRI to its short name (the reverse of ACL_MODE_IRI). */

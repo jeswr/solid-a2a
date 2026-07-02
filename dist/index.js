@@ -951,8 +951,7 @@ async function parseIntentGraph(input, contentType2 = "text/turtle", baseIRI) {
   return intentFromRdf(dataset);
 }
 function projectIntent(node) {
-  const actions = [...node.actions];
-  const action = actions[0];
+  const action = [...node.actions][0];
   if (action === void 0) {
     return void 0;
   }
@@ -963,20 +962,8 @@ function projectIntent(node) {
   const target = kind === "list" ? firstIri(action.targets) : firstIri(action.objects);
   const recipient = firstIri(action.recipients);
   const agent = firstIri(action.agents) ?? firstIri(node.agents);
-  const modes = [];
-  for (const m of action.modes) {
-    if (m.termType === "NamedNode" && VALID_ACL_MODE_IRIS.has(m.value)) {
-      modes.push(aclModeFromIri(m.value));
-    }
-  }
-  const parameters = [];
-  for (const p of node.parameters) {
-    const key = firstLiteral(p.keys);
-    const value = firstLiteral(p.values);
-    if (key !== void 0 && value !== void 0) {
-      parameters.push({ key, value });
-    }
-  }
+  const modes = readGrantModes(action);
+  const parameters = readParameters(node);
   return {
     id: node.value,
     action: kind,
@@ -986,6 +973,26 @@ function projectIntent(node) {
     ...modes.length > 0 && { modes },
     ...parameters.length > 0 && { parameters }
   };
+}
+function readGrantModes(action) {
+  const modes = [];
+  for (const m of action.modes) {
+    if (m.termType === "NamedNode" && VALID_ACL_MODE_IRIS.has(m.value)) {
+      modes.push(aclModeFromIri(m.value));
+    }
+  }
+  return modes;
+}
+function readParameters(node) {
+  const parameters = [];
+  for (const p of node.parameters) {
+    const key = firstLiteral(p.keys);
+    const value = firstLiteral(p.values);
+    if (key !== void 0 && value !== void 0) {
+      parameters.push({ key, value });
+    }
+  }
+  return parameters;
 }
 function aclModeFromIri(iri) {
   for (const [name, modeIri] of Object.entries(ACL_MODE_IRI)) {
